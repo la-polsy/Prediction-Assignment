@@ -1,0 +1,107 @@
+---
+title: "Prediction Assignment"
+author: "Paola Bianchi"
+date: "13 October 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+## Get the data
+
+We first download the data and load it into R. By quickly inspecting the csv one can notice than some numerical fields sometimes have "" or "#DIV/0!" or "NA" as value, so we flag them as NA strings in the load call to avoid having them interpreted as strings.
+```{r loadData, message=FALSE}
+# import libraries
+library(caret); library(randomForest)
+
+# load data
+if(!file.exists("pml-training.csv")){
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv", method = "curl")
+}
+trainingData <- read.csv("pml-training.csv", sep=",", na.strings = c("","#DIV/0!","NA"), header = TRUE)
+if(!file.exists("pml-testing.csv")){
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv", method = "curl")
+}
+testingData <- read.csv("pml-testing.csv", sep=",", na.strings = c("","#DIV/0!","NA"), header = TRUE)
+```
+
+## Clean the data
+
+We exclude variables that are almost always the same (near zero variance) or that are mostly NA values (50% or more). We also remove the X column because it's just the row number and the name of the subject, since we don't want to influence the prediction.
+We also remove the timestamp information, to avoid correlation between the correctness of the exercise and the time when the subjects were asked to perform a certain task.
+
+```{r clean}
+# remove X and name
+trainingData <- trainingData[, -c(1:2)]
+testingData <- testingData[, -c(1:2)]
+# remove near zero variance
+nzv <- nearZeroVar(trainingData, saveMetrics=TRUE)
+trainingData <- trainingData[, !nzv$nzv]
+testingData <- testingData[, !nzv$nzv]
+# remove mostly NA
+trainRows <- nrow(trainingData)
+testRows <- nrow(testingData)
+trainingData <- trainingData[, colSums(is.na(trainingData)) < trainRows/2]
+testingData <- testingData[, colSums(is.na(testingData)) < testRows/2]
+# remove timestamp
+timestampCols <- grep("timestamp|num_window", names(trainingData))
+trainingData <- trainingData[, -timestampCols]
+testingData <- testingData[, -timestampCols]
+```
+
+
+## Split data
+
+Since the testingData will be used for the quiz, we split the trainingData into training and testing so that we can use the testing to correct the model.
+
+```{r split}
+set.seed(1234)
+inTrain = createDataPartition(trainingData$classe, p = 3/4)[[1]]
+training = trainingData[ inTrain,]
+testing = trainingData[-inTrain,]
+```
+
+## Fit models
+
+We try 3 different methods for producing our models: random forests (function randomForest), classification trees ("rpart") and linear discriminant analysis ("lda"). We produce for each a prediction and evaluate it by looking at the accuracy given by the confusionMatrix function.
+
+```{r fit, warning=FALSE, message=FALSE}
+set.seed(1234)
+# use randomForest because caret takes forever with rf
+fit1 <- randomForest(classe~., data = training)
+fit2 <- train(classe~., method = "rpart", data = training)
+fit3 <- train(classe~., method = "lda", data = training)
+
+# predict
+pred1 <- predict(fit1, newdata = testing)
+pred2 <- predict(fit2, newdata = testing)
+pred3 <- predict(fit3, newdata = testing)
+
+# get confusion
+acc1 <- confusionMatrix(pred1, testing$classe)$overall[1]
+acc2 <- confusionMatrix(pred2, testing$classe)$overall[1]
+acc3 <- confusionMatrix(pred3, testing$classe)$overall[1]
+
+sprintf("accuracy of random forest: %.2f%%; accuracy of classification trees: %.2f%%; accuracy of linear discriminant analysis: %.2f%%", acc1*100, acc2*100, acc3*100)
+```
+
+Classification trees seem to be quite bad, they're as reliable as a coin flip. LDA is also not really good, most likely due to correlated variables (warning messages were suppressed in the above code, but they warned about collinear variables).
+Random forest instead have a very high accuracy (most likely because they choose a subset of predictors at each split, which overcomes the correlation of the variables), as the expected out of sample error is 0.47%, so we choose this model for our prediction.
+
+
+## Final prediction
+
+Here's out final prediction on the provided test set:
+
+```{r pred}
+predict(fit1, testingData)
+```
+
+
